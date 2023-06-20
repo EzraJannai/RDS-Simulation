@@ -12,12 +12,14 @@ def simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, n, k, x, method):
     p_1_to_2 = N_2 * E_D_2 / (N_2 * E_D_2 + N_1 * E_D_1 * h_1)
     p_2_to_1 = N_1 * E_D_1 / (N_1 * E_D_1 + N_2 * E_D_2 * h_2)
     
+    harmonic_degree = np.zeros(2)
 
     def generate_individual_properties(N_1, N_2, E_D_1, E_D_2, h_1, h_2, type):
 
         individual_type = np.random.choice([1, 2], p=[N_1, N_2]) if type == 3 else type
-        
-        degree = E_S_1 if individual_type == 1 else E_S_2
+
+        #This is the size biased degree distribution
+        degree = np.random.poisson(4) + 2 if individual_type == 1 else np.random.poisson(4) + 2
         
         if individual_type == 1:
             links_to_group_2 = np.random.binomial(degree-1, p_1_to_2)
@@ -65,6 +67,7 @@ def simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, n, k, x, method):
     data_total_individuals = np.zeros((x, 1))
     data_type_counts = np.zeros((x, 2))
     data_invitations = np.zeros((x, 2, 2))
+    data_harmonic_degree = np.zeros((x, 2)) # To store harmonic means for each generation
     data_invitations_links = np.zeros((x, 2, 2))
 
     degree_type_1 = []  # New line
@@ -76,6 +79,7 @@ def simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, n, k, x, method):
             'total_individuals': 0,
             'type_counts': np.zeros(2),
             'invitations': np.zeros((2, 2)),
+            'harmonic_degree': np.zeros(2), # We do not need to copy a harmonic_degree array anymore
             'invitations_links': np.zeros((2, 2))
         }
 
@@ -98,9 +102,12 @@ def simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, n, k, x, method):
         current_generation = new_generation
 
         # Compute harmonic mean at the end of each generation and store them in results['harmonic_degree']
+        results['harmonic_degree'][0] = len(degree_type_1) / sum(1.0/i for i in degree_type_1) if degree_type_1 else 0
+        results['harmonic_degree'][1] = len(degree_type_2) / sum(1.0/i for i in degree_type_2) if degree_type_2 else 0
         data_total_individuals[gen] = results['total_individuals']
         data_type_counts[gen] = results['type_counts']
         data_invitations[gen] = results['invitations']
+        data_harmonic_degree[gen] = results['harmonic_degree'] # Save harmonic mean of degree for each type in each generation
         data_invitations_links[gen] = results['invitations_links']
 
     
@@ -109,13 +116,14 @@ def simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, n, k, x, method):
     else:
         data_links= data_invitations_links
         
-    return data_total_individuals, data_type_counts, data_links # Return data_harmonic_degree
+    return data_total_individuals, data_type_counts, data_links, data_harmonic_degree # Return data_harmonic_degree
 
-def calculate_estimators(data_total_individuals, data_type_counts, data_invitations, i):
+def calculate_estimators(data_total_individuals, data_type_counts, data_invitations, data_harmonic_degree, i):
 
     total_individuals = data_total_individuals[:i+1].sum(axis=0)
     type_counts = data_type_counts[:i+1].sum(axis=0)
     invitations = data_invitations[:i+1].sum(axis=0)
+    harmonic_degree = data_harmonic_degree[:i+1].mean(axis=0)
 
     p_11_count = invitations[0][0]
     p_12_count = invitations[0][1]
@@ -124,8 +132,9 @@ def calculate_estimators(data_total_individuals, data_type_counts, data_invitati
 
     with np.errstate(divide='ignore', invalid='ignore'):
         # Instead of computing the average degree, we simply use the calculated harmonic mean
-        E_D_1_est = 5
-        E_D_2_est = 5
+        E_D_1_est = harmonic_degree[0]
+        E_D_2_est = harmonic_degree[1]
+
         try:
             p_12_est = p_12_count / (p_12_count + p_11_count)
         except ZeroDivisionError:
@@ -137,7 +146,7 @@ def calculate_estimators(data_total_individuals, data_type_counts, data_invitati
             p_21_est = float('nan')
 
         try:
-            z_est = (((p_11_count + p_12_count) * p_21_count) / ((p_21_count + p_22_count) * p_12_count))
+            z_est = (((p_11_count + p_12_count) * p_21_count) / ((p_21_count + p_22_count) * p_12_count))*(E_D_2_est/E_D_1_est )
         except ZeroDivisionError:
             z_est = float('nan')
 
@@ -166,9 +175,9 @@ def run_multiple_simulations(simulations, steps):
 
     for i in range(simulations):
         print(i)
-        data_total_individuals, data_type_counts, data_links = simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, seeds, coupons, steps, method)
+        data_total_individuals, data_type_counts, data_links, data_degree_mean = simulate_RDS(N_1, N_2, h_1, h_2, E_D_1, E_D_2, seeds, coupons, steps, method)
         for i in range(steps):
-            p_12_est, p_21_est, E_D_1_est, E_D_2_est, N_1_est, h_1_est, z_est = calculate_estimators(data_total_individuals, data_type_counts, data_links, i)
+            p_12_est, p_21_est, E_D_1_est, E_D_2_est, N_1_est, h_1_est, z_est = calculate_estimators(data_total_individuals, data_type_counts, data_links, data_degree_mean, i)
             p_12_ests[i].append(p_12_est)
             p_21_ests[i].append(p_21_est)
             E_D_1_ests[i].append(E_D_1_est)
@@ -181,25 +190,22 @@ def run_multiple_simulations(simulations, steps):
 
 
 
-# Define your sets of parameters
+# Define your sets of parameters you want to simulate
 parameters = [
-     (10, 0.5),
-     (0.6, 2)
-]
-"""
-     (0.6, 2)     (0.2, 0.2),
+     (1, 1),
+     (0.2, 0.2),
      (5, 0.2), 
      (5, 5),
      (0.6, 2)
-"""
+]
 
 # Average size biased degree for both groups
-E_S_1 = 5
-E_S_2 = 5
+E_S_1 = 6
+E_S_2 = 6
 
 # Average degree for bothh groups, in this case it is the harmonic mean of Pois(E_S_1 - 2) + 2
-E_D_1 = 5
-E_D_2 = 5   
+E_D_1 = 5.302
+E_D_2 = 5.302   
 # Constants for seeds, coupons, generations, and simulations
 seeds = 1
 coupons = 1
@@ -217,8 +223,9 @@ for h_1, z in parameters:
 
     for method in range(1, 4):  # Loop over the 3 methods
         ests = run_multiple_simulations(simulations, generations)
+
         # Generate the filename
-        filename = f"2simulation_results_m{method}_z{z}_h{h_1}.pkl"
+        filename = f"simulation_results_m{method}_z{z}_h{h_1}.pkl"
 
         # Save the results to a file
         with open(filename, "wb") as f:
